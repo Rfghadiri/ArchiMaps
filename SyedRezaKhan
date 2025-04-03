@@ -1,0 +1,98 @@
+import folium 
+import rasterio
+from folium.raster_layers import ImageOverlay
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+
+# Load TIFF and extract bounding box
+tiff_path = "G:\\1-University\\2-Msc. Art university\\Ta\\4\\GIS_archi\\GeoRef\\1304\\1304.tif"
+
+with rasterio.open(tiff_path) as src:
+    bounds = src.bounds  # (minX, minY, maxX, maxY)
+    image = src.read(1)  # Read the first band (grayscale)
+    
+    # Check if the CRS is not in WGS84 (EPSG:4326) and reproject if necessary
+    if src.crs != rasterio.crs.CRS.from_epsg(4326):
+        from rasterio.warp import calculate_default_transform, reproject, Resampling
+        transform, width, height = calculate_default_transform(
+            src.crs, "EPSG:4326", src.width, src.height, *src.bounds
+        )
+        kwargs = src.meta.copy()
+        kwargs.update({
+            "crs": "EPSG:4326",
+            "transform": transform,
+            "width": width,
+            "height": height
+        })
+        
+        with rasterio.open("reprojected.tif", "w", **kwargs) as dst:
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=rasterio.band(dst, 1),
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=transform,
+                dst_crs="EPSG:4326",
+                resampling=Resampling.nearest
+            )
+        
+        # Reload the reprojected image
+        with rasterio.open("reprojected.tif") as src:
+            bounds = src.bounds
+            image = src.read(1)
+
+# Normalize image for better visualization
+def normalize_image(image):
+    image = np.clip(image, np.percentile(image, 2), np.percentile(image, 98))  # Clip extreme values
+    image = (255 * (image - np.min(image)) / (np.max(image) - np.min(image))).astype(np.uint8)
+    return image
+
+image = normalize_image(image)
+
+# Apply colormap for better visualization
+plt.imsave("processed_image.png", image, cmap="gray")
+
+# Define map with center at image
+m = folium.Map(location=[(bounds.top + bounds.bottom) / 2, (bounds.left + bounds.right) / 2], zoom_start=12)
+
+# Overlay image
+image_overlay = ImageOverlay(
+    name="TIFF Overlay",
+    image="processed_image.png",
+    bounds=[[bounds.bottom, bounds.left], [bounds.top, bounds.right]],
+    opacity=1,
+)
+image_overlay.add_to(m)
+
+# Add a swipe control using JavaScript
+swipe_html = '''
+<div style="position: fixed; bottom: 50px; left: 50px; width: 250px; height: 100px; background-color: white; 
+            z-index:9999; font-size:14px; border:2px solid grey; padding: 10px;">
+    <b>Layer Swipe</b><br>
+    <input id="swipe-slider" type="range" min="0" max="100" step="1" value="100" 
+    oninput="document.querySelectorAll('.leaflet-image-layer').forEach(e => e.style.clipPath = 'inset(0 ' + (100-this.value) + '% 0 0)')">
+</div>
+'''
+m.get_root().html.add_child(folium.Element(swipe_html))
+
+# Add custom text at the top-right
+custom_html = '''
+<head>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap" rel="stylesheet"> 
+    <!-- Use a link to a hosted Persian font like 'Vazirmatn' for Google Fonts. Replace with Btitr if available -->
+</head>
+<div style="position: fixed; top: 70px; right: 10px; font-size: 24px; color: black; z-index: 9999; text-align: right; font-weight: bold; font-family: 'Vazirmatn', sans-serif;">
+    نقشه سید رضا خان<br>
+     سال 1304 هجری شمسی
+</div>
+'''
+m.get_root().html.add_child(folium.Element(custom_html))
+
+# Add layer control
+folium.LayerControl().add_to(m)
+
+# Save map
+m.save("map_with_tiff.html")
+
+print("Map saved as 'map_with_tiff.html'. Open it in a browser.")
